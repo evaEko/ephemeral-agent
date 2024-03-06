@@ -1,0 +1,35 @@
+trigger: none
+resources:
+  pipelines:
+  - pipeline: CreateTerraformStorageAccount
+    source: create_terraform_storage_account
+    trigger: true
+
+variables:
+- group: AzureDevOpsACI.StorageAccountForTerraform
+- group: AzureDevOpsACI.Secrets
+- group: AzureDevOpsACI.Generic
+- group: AzureDevOpsACI.Registry
+
+- name: PERMISSION_FILE
+  value: $(System.DefaultWorkingDirectory)/resources/set_permissions.sh
+
+
+stages:
+- stage: SetUpInfrastructure
+  jobs:
+  - job: SetupRegistryAndConnection
+    displayName: 'Set up resources with Terraform'
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - checkout: self
+    - template: ../terraform/templates/terraform-setup-template.yml
+      parameters:
+         service_connection: "$(SERVICE_CONNECTION)"
+         permission_file: "$(PERMISSION_FILE)"
+         action: "apply"
+         TERRAFORM_VARS_TEMPLATE: "terraform_vars_template.conf"
+         BACKEND_CONF_FILE: "backend.conf"
+         BACKEND_CONF_TEMPLATE: "terraform_vars_template.conf"
+         TERRAFORM_DIR: $(System.DefaultWorkingDirectory)/terraform

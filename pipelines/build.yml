@@ -1,0 +1,58 @@
+trigger: none
+
+variables:
+- group: AzureDevOpsACI.Secrets
+- name: pipelineOrder
+  value: 'create_terraform_storage_account,create_infrastructure,create_image_and_run_agent'
+
+jobs:
+- job: 
+  displayName: 'Run pipelines'
+  pool:
+    vmImage: 'ubuntu-latest'
+  steps:
+    - checkout: self
+      persistCredentials: true
+    - script: |
+        echo "Fetching list of pipelines..."
+        response=$(az rest --method get --uri "$(System.TeamFoundationCollectionUri)$(System.TeamProject)/_apis/pipelines?api-version=7.1" --headers "{\"Authorization\":\"Bearer $(System.AccessToken)\"}")
+
+        pipelineList=$(echo $response | jq -r '.value[] | "\(.name):\(.id)"' | paste -sd ";" -) # had trouble passing a list; pipeline vars can be only strings
+        echo "##vso[task.setvariable variable=PIPELINENAMEIDLIST]$pipelineList"
+      displayName: 'Get Pipelines List'
+    - script: |
+        # rest call needs additional access rights (using user pat token instead of accesstoken): https://docs.microsoft.com/en-us/azure/devops/pipelines/policies/permissions?view=azure-devops
+        base64PAT=$(echo -n ":$(AZ_TOKEN)" | base64)
+        IFS=',' read -ra PIPELINE_NAMES <<< "$(pipelineOrder)"
+        for name in "${PIPELINE_NAMES[@]}"; do
+          echo "Processing pipeline: $name"
+          # Extracting the pipeline ID using the name
+          pipelineId=$(echo "$(PIPELINENAMEIDLIST)" | tr ';' '\n' | grep "^$name:" | cut -d':' -f2)
+          
+          if [ ! -z "$pipelineId" ]; then
+            echo "Triggering pipeline $name with ID $pipelineId"
+            requestBody="{\"previewRun\":false,\"runParameters\":{}}"
+            
+            # Triggering the pipeline
+            #triggerResponse=$(az rest --method post --uri "$(System.TeamFoundationCollectionUri)$(System.TeamProject)/_apis/pipelines/$pipelineId/runs?api-version=7.1" --body "$requestBody" --headers "{\"Authorization\":\"Basic $base64PAT\"}")
+            #runId=$(echo $triggerResponse | jq -r '.id')
+            #echo "Triggered pipeline run ID: $runId"
+            
+            # Polling for the pipeline run completion
+            # while true; do
+            #   statusResponse=$(az rest --method get --uri "$(System.TeamFoundationCollectionUri)$(System.TeamProject)/_apis/pipelines/runs/$runId?api-version=7.1" --headers "{\"Authorization\":\"Basic $base64PAT\"}")
+            #   status=$(echo $statusResponse | jq -r '.state')
+            #   if [ "$status" == "completed" ]; then
+            #     echo "Pipeline $name completed."
+            #     break
+            #   else
+            #     echo "Pipeline $name is $status. Waiting..."
+            #     sleep 30
+            #   fi
+            # done
+          else
+            echo "ID for pipeline $name not found."
+          fi
+        done
+      displayName: 'Trigger and Monitor Pipelines'
+

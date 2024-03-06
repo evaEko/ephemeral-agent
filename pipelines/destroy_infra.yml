@@ -1,0 +1,26 @@
+trigger: none
+variables:
+- group: AzureDevOpsACI.StorageAccountForTerraform
+- group: AzureDevOpsACI.Secrets
+- group: AzureDevOpsACI.Generic
+- group: AzureDevOpsACI.Registry
+
+
+stages:
+- stage: DeleteInfrastructure
+  jobs:
+  - job: DeleteInfrastructure
+    displayName: 'Set up resources with Terraform'
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - checkout: self
+    - template: ../terraform/templates/terraform-setup-template.yml
+      parameters:
+         service_connection: "$(SERVICE_CONNECTION)"
+         permission_file: $(System.DefaultWorkingDirectory)/resources/set_permissions.sh 
+         action: "destroy"
+         TERRAFORM_VARS_TEMPLATE: "terraform_vars_template.conf"
+         BACKEND_CONF_FILE: "backend.conf"
+         BACKEND_CONF_TEMPLATE: "terraform_vars_template.conf"
+         TERRAFORM_DIR: $(System.DefaultWorkingDirectory)/terraform

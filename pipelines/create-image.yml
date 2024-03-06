@@ -1,0 +1,141 @@
+trigger: none
+resources:
+  pipelines:
+  - pipeline: CreateInfrastructure
+    source: create_infrastructure
+    trigger: 
+      branches:
+        include:
+        - main
+
+variables:
+- group: AzureDevOpsACI.Secrets
+- group: AzureDevOpsACI.Generic
+- group: AzureDevOpsACI.Registry
+- name: AGENT_NAME
+  value: "aci-agent-$(Build.BuildId)"
+- name: AGENT_IMAGE_TAG
+  value: "$(Build.BuildId)"
+- name: AGENT_IMAGE_AND_TAG
+  value: "$(IMAGE_REPOSITORY_NAME):$(AGENT_IMAGE_TAG)"
+- name: REGISTRY_IMAGE
+  value: "$(REGISTRY_NAME).azurecr.io/$(IMAGE_REPOSITORY_NAME):$(AGENT_IMAGE_TAG)"
+
+stages:
+- stage: BuildAndRun
+  displayName: 'Build and Run'
+  jobs:
+  - job: BuildAndPushImage
+    displayName: 'Build and upload docker image of agent'
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+      - task: Docker@2
+        displayName: 'Log in to ACR'
+        inputs:
+          command: login
+          containerRegistry: $(DEVOPS_REGISTRY_CONNECTION_NAME)
+      - task: Docker@2
+        displayName: 'Build and push a image to container registry'
+        inputs:
+          command: buildAndPush
+          #dockerFile: path/to/your/Dockerfile
+          repository: $(IMAGE_REPOSITORY_NAME)
+          containerRegistry: $(DEVOPS_REGISTRY_CONNECTION_NAME)
+          tags: |
+            latest
+            $(Build.BuildId)
+      - task: Docker@2
+        displayName: Log out of ACR
+        inputs:
+          command: logout
+          containerRegistry: $(DEVOPS_REGISTRY_CONNECTION_NAME)
+- stage: RunAgent
+  displayName: 'Run Agent'
+  dependsOn: BuildAndRun
+  condition: succeeded()
+  jobs:
+    - job: StartDockerAgent
+      displayName: 'Start Docker Agent'
+      pool:
+        vmImage: 'ubuntu-latest'
+      steps:
+      - checkout: none  
+      - task: AzureCLI@1
+        displayName: Get Azure Credentials for Terraform
+        inputs:
+          azureSubscription: $(SERVICE_CONNECTION)
+          scriptLocation: inlineScript
+          inlineScript: |
+            set -eu
+            subscriptionId=$(az account show --query id -o tsv)
+            echo "##vso[task.setvariable variable=ARM_CLIENT_ID;issecret=false]$servicePrincipalId"
+            echo "##vso[task.setvariable variable=ARM_CLIENT_SECRET;issecret=false]$servicePrincipalKey"
+          addSpnToEnvironment: true      
+      - task: AzureCLI@2
+        displayName: 'Start Agent Container in ACI'
+        inputs:
+          azureSubscription: '$(SERVICE_CONNECTION)'
+          scriptType: 'bash'
+          scriptLocation: 'inlineScript'
+          inlineScript: |
+            az container create \
+            --resource-group $(RESOURCE_GROUP_NAME) \
+            --registry-username $(ARM_CLIENT_ID) \
+            --registry-password  $(ARM_CLIENT_SECRET) \
+            --name $(AGENT_NAME) \
+            --image $(REGISTRY_IMAGE) \
+            --environment-variables \
+            AZP_URL="$(System.CollectionUri)" \
+            AZP_TOKEN="$(AZ_TOKEN)" \
+            AZP_POOL="$(AZ_POOL)" \
+            AZP_AGENT_NAME="$(AGENT_NAME)" \
+            --restart-policy OnFailure
+    - job: BuildJob
+      displayName: 'Run build on agent'
+      dependsOn: StartDockerAgent
+      pool:
+        name: '$(AZ_POOL)'
+      steps:
+      - checkout: self
+      - script: |
+          echo "This is what is here:"
+          ls
+          echo "I am building on an agent from the agent pool"
+        displayName: 'Run Build Tasks'
+    - job: Cleanup
+      displayName: 'Clean up'
+      dependsOn: BuildJob
+      condition: always()
+      pool:
+        vmImage: 'ubuntu-latest'
+      steps:
+      - task: AzureCLI@2
+        displayName: 'Remove the agent container and deregister agent'
+        inputs:
+          azureSubscription: '$(SERVICE_CONNECTION)'
+          scriptType: 'bash'
+          scriptLocation: 'inlineScript'
+          inlineScript: |
+            az container delete \
+              --resource-group $(RESOURCE_GROUP_NAME) \
+              --name '$(AGENT_NAME)' \
+              --yes
+      - script: |
+          echo "Deregistering agent from agent pool"
+          chmod +x ../resources/deregistration_agent.sh
+          ./resources/deregistration_agent.sh $(System.CollectionUri) $(AZ_TOKEN) $(AZ_POOL) $(AGENT_NAME)
+        displayName: 'Deregister Azure DevOps Agent'
+      - task: AzureCLI@2
+        displayName: 'Remove the tag from the image repository'
+        inputs:
+          azureSubscription: '$(SERVICE_CONNECTION)'
+          scriptType: 'bash'
+          scriptLocation: 'inlineScript'
+          inlineScript: |
+            echo "Deleting tag from image repository $(AGENT_IMAGE_AND_TAG) from registry $(REGISTRY_NAME)"
+            echo $(AGENT_IMAGE_AND_TAG)
+            az acr repository delete \
+              --name '$(REGISTRY_NAME)' \
+              --image $(AGENT_IMAGE_AND_TAG) \
+              --yes

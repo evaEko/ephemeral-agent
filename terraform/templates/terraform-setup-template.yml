@@ -1,0 +1,68 @@
+# terraform-setup-template.yml
+parameters:
+  action: 'apply'
+  service_connection: ''
+  TERRAFORM_DIR: ''
+  BACKEND_CONF_FILE: ''
+  PERMISSION_FILE: ''
+
+steps:
+- task: TerraformInstaller@1
+  inputs:
+    terraformVersion: 'latest'
+
+- task: AzureCLI@1
+  displayName: Prepare Azure credentials for Terraform
+  inputs:
+    azureSubscription: "${{ parameters.service_connection }}"
+    scriptLocation: inlineScript
+    inlineScript: |
+      set -eu
+      subscriptionId=$(az account show --query id -o tsv)
+      echo "##vso[task.setvariable variable=ARM_CLIENT_ID;issecret=false]$servicePrincipalId"
+      echo "##vso[task.setvariable variable=ARM_CLIENT_SECRET;issecret=false]$servicePrincipalKey"
+      echo "##vso[task.setvariable variable=ARM_SUBSCRIPTION_ID;issecret=false]$subscriptionId"
+      echo "##vso[task.setvariable variable=ARM_TENANT_ID;issecret=false]$tenantId"
+    addSpnToEnvironment: true
+- template: backend_config_template.yml
+  parameters:
+    resourceGroupName: $(STORAGE_ACCOUNT_RESOURCE_GROUP_NAME)
+    storageAccountName: $(STORAGE_ACCOUNT_NAME)
+    containerName: $(STORAGE_CONTAINER_NAME)
+    containerKey: $(STORAGE_ACCOUNT_CONTAINER_KEY)
+    outputFileName: ${{ parameters.BACKEND_CONF_FILE }}
+    workingDirectory: ${{ parameters.TERRAFORM_DIR }}
+- template: terraform_vars_template.yml
+  parameters:
+    project_id: "$(System.TeamProjectId)"
+    personal_access_token: "$(AZ_TOKEN)"
+    subscription_id: "$(ARM_SUBSCRIPTION_ID)"
+    service_principal_id: "$(ARM_CLIENT_ID)"
+    service_principal_key: "$(ARM_CLIENT_SECRET)"
+    tenant_id: "$(ARM_TENANT_ID)"
+    agent_pool_name: "$(AZ_POOL)"
+    location: "$(LOCATION)"
+    resource_group_name: "$(RESOURCE_GROUP_NAME)"
+    org_service_url: "$(System.TeamFoundationCollectionUri)"
+    devops_conn_registry_name: "$(DEVOPS_REGISTRY_CONNECTION_NAME)"
+    container_registry_name: "$(REGISTRY_NAME)"
+    permission_file: "${{ parameters.permission_file }}"
+    workingDirectory: ${{ parameters.TERRAFORM_DIR }}
+- script: |
+    terraform init -backend-config="${{ parameters.BACKEND_CONF_FILE }}"
+  displayName: "Terraform init with ${{ parameters.BACKEND_CONF_FILE}}"
+  workingDirectory: ${{ parameters.TERRAFORM_DIR }}
+- script: |
+    terraform plan
+  displayName: "Terraform plan for apply"
+  workingDirectory: ${{ parameters.TERRAFORM_DIR }}
+  condition: ${{ eq(parameters.action, 'apply') }}
+- script: |
+    terraform plan -destroy
+  displayName: "Terraform plan for destroy"
+  workingDirectory: ${{ parameters.TERRAFORM_DIR }}
+  condition: ${{ eq(parameters.action, 'destroy') }}
+- script: |
+    terraform ${{ parameters.action }} --auto-approve
+  displayName: "Terraform ${{ parameters.action }}"
+  workingDirectory: ${{ parameters.TERRAFORM_DIR }}

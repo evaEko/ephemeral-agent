@@ -1,0 +1,56 @@
+# File: terraform_vars_template.yml
+
+parameters:
+  - name: project_id
+    type: string
+  - name: personal_access_token
+    type: string
+  - name: subscription_id
+    type: string
+  - name: service_principal_id
+    type: string
+  - name: service_principal_key
+    type: string
+  - name: tenant_id
+    type: string
+  - name: agent_pool_name
+    type: string
+  - name: location
+    type: string
+  - name: resource_group_name
+    type: string
+  - name: org_service_url
+    type: string
+  - name: devops_conn_registry_name
+    type: string
+  - name: container_registry_name
+    type: string
+  - name: permission_file
+    type: string
+    default: "../../resources/set_permissions.sh"
+  - name:  outputFileName
+    type: string
+    default: 'terraform.tfvars'
+  - name: workingDirectory
+    type: string
+
+steps:
+  - script: |
+      cd "${{ parameters.workingDirectory }}"
+      outputFileName="${{ parameters.outputFileName }}"
+      cat <<EOF > "$outputFileName"
+      project_id                = "${{ parameters.project_id }}"
+      personal_access_token     = "${{ parameters.personal_access_token }}"
+      subscription_id           = "${{ parameters.subscription_id }}"
+      service_principal_id      = "${{ parameters.service_principal_id }}"
+      service_principal_key     = "${{ parameters.service_principal_key }}"
+      tenant_id                 = "${{ parameters.tenant_id }}"
+      agent_pool_name           = "${{ parameters.agent_pool_name }}"
+      location                  = "${{ parameters.location }}"
+      resource_group_name       = "${{ parameters.resource_group_name }}"
+      org_service_url           = "${{ parameters.org_service_url }}"
+      devops_conn_registry_name = "${{ parameters.devops_conn_registry_name }}"
+      container_registry_name   = "${{ parameters.container_registry_name }}"
+      permission_file= "${{ parameters.permission_file }}"
+      EOF
+    displayName: 'Create terraform vars config'

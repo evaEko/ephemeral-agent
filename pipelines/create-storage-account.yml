@@ -1,0 +1,154 @@
+trigger: none
+
+variables:
+- group: AzureDevOpsACI.Secrets
+- name: STORAGE_ACCOUNT_NAME
+  value: tfstateaccountstorage123 
+- name: STORAGE_CONTAINER_NAME
+  value: terraformstatecontainer
+- name: STORAGE_ACCOUNT_RESOURCE_GROUP_NAME
+  value: "eko_storage_resource_rg"
+- name: STORAGE_ACCOUNT_CONTAINER_KEY
+  value: "terraform.tfstate"
+- name: STORAGE_LOCATION
+  value: "westeurope"
+- name: RESOURCE_LOCATION
+  value: "westeurope" # set location for the infrastructure
+- name: RESOURCE_GROUP_NAME
+  value: "eko_rg" # set location for the infrastructure
+- name: AZ_POOL
+  value: "AgentsPool" # set location for the infrastructure
+- name: DEVOPS_REGISTRY_CONNECTION_NAME
+  value: 'eko-registry-service-connection'
+- name: IMAGE_REPOSITORY_NAME
+  value: "agent_image_repo"
+- name: REGISTRY_NAME
+  value: "ekoagentregistry"
+- name: REGISTRY_USER
+  value: "ekoagentregistryuser"
+
+stages:
+- stage: CreateVariableGroup
+  displayName: 'Create variable groups'
+  jobs:
+  - job: SetupVariableGroups
+    displayName: 'Set up variable groups'
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: $(SERVICE_CONNECTION)
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        displayName: 'Set up generic variable group'
+        inlineScript: |
+          groupName="AzureDevOpsACI.Generic"
+          groupId=$(az pipelines variable-group list --org $(System.CollectionUri) --project $(System.TeamProject) --query "[?name=='$groupName'].id" -o tsv)
+
+          if [ -z "$groupId" ]; then
+            echo "Variable group with generic data for pipelines is being created."
+            az pipelines variable-group create --name $groupName --variables \
+            SERVICE_CONNECTION=$(SERVICE_CONNECTION) \
+            LOCATION=$(RESOURCE_LOCATION) \
+            RESOURCE_GROUP_NAME=$(RESOURCE_GROUP_NAME) \
+            AZ_POOL=$(AZ_POOL) \
+            --authorize=true \
+            --org $(System.CollectionUri) \
+            --project $(System.TeamProject)
+          else
+            echo "Generic variable group already exists."
+          fi
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: $(SERVICE_CONNECTION)
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        displayName: 'Set up registry variable group'
+        inlineScript: |
+          groupName="AzureDevOpsACI.Registry"
+          groupId=$(az pipelines variable-group list --org $(System.CollectionUri) --project $(System.TeamProject) --query "[?name=='$groupName'].id" -o tsv)
+
+          if [ -z "$groupId" ]; then
+            echo "Variable group with generic data for pipelines is being created."
+            az pipelines variable-group create --name $groupName --variables \
+            DEVOPS_REGISTRY_CONNECTION_NAME=$(DEVOPS_REGISTRY_CONNECTION_NAME) \
+            IMAGE_REPOSITORY_NAME=$(IMAGE_REPOSITORY_NAME) \
+            REGISTRY_NAME=$(REGISTRY_NAME) \
+            REGISTRY_USER=$(REGISTRY_USER) \
+            --authorize=true \
+            --org $(System.CollectionUri) \
+            --project $(System.TeamProject)
+          else
+            echo "Registry variable group already exists."
+          fi
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: $(SERVICE_CONNECTION)
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        displayName: 'Create Variable Group for Storage Account if it does not exist'
+        inlineScript: |
+          groupName="AzureDevOpsACI.StorageAccountForTerraform"
+          groupId=$(az pipelines variable-group list --org $(System.CollectionUri) --project $(System.TeamProject) --query "[?name=='$groupName'].id" -o tsv)
+
+          if [ -z "$groupId" ]; then
+            echo "Variable group with data on terraform storage is being created."
+            az pipelines variable-group create --name $groupName --variables \
+            STORAGE_ACCOUNT_NAME=$(STORAGE_ACCOUNT_NAME) \
+            STORAGE_CONTAINER_NAME=$(STORAGE_CONTAINER_NAME) \
+            STORAGE_ACCOUNT_RESOURCE_GROUP_NAME=$(STORAGE_ACCOUNT_RESOURCE_GROUP_NAME) \
+            STORAGE_ACCOUNT_CONTAINER_KEY=$(STORAGE_ACCOUNT_CONTAINER_KEY) \
+            STORAGE_LOCATION=$(STORAGE_LOCATION) \
+            --authorize=true \
+            --org $(System.CollectionUri) \
+            --project $(System.TeamProject)
+          else
+            echo "Variable group already exists."
+          fi
+- stage: CreateStorageAccount
+  displayName: 'Create Storage Account for Terraform'
+  jobs:
+  - job: SetupVariableGroup
+    displayName: 'Create Storage Account for Terraform state if it does not exist'
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+      - task: AzureCLI@2
+        displayName: 'Create storage account and container for Terraform state if it does not exist'
+        inputs:
+          azureSubscription: $(SERVICE_CONNECTION)
+          scriptType: 'bash'
+          scriptLocation: 'inlineScript'
+          inlineScript: |
+            # check if resource group for the storage account exist and create if not:
+            RESOURCE_GROUP_EXISTS=$(az group exists --name $(STORAGE_ACCOUNT_RESOURCE_GROUP_NAME))
+            echo "Resource group exists: $RESOURCE_GROUP_EXISTS"
+            if [ "$RESOURCE_GROUP_EXISTS" == "false" ]; then
+              echo "Creating resource group: $(STORAGE_ACCOUNT_RESOURCE_GROUP_NAME)"
+              az group create --name $(STORAGE_ACCOUNT_RESOURCE_GROUP_NAME) --location $(STORAGE_LOCATION)
+            else
+              echo "Resource group $(STORAGE_ACCOUNT_RESOURCE_GROUP_NAME) already exists."
+            fi
+
+            # check if storage account exists and create if not:
+            ACCOUNT_EXISTS=$(az storage account check-name --name $(STORAGE_ACCOUNT_NAME) --query 'nameAvailable' -o tsv)
+            echo "Storage account name available: $ACCOUNT_EXISTS"
+            if [ "$ACCOUNT_EXISTS" == "true" ]; then
+              echo "Creating storage account: $(STORAGE_ACCOUNT_NAME)"
+              az storage account create --name $(STORAGE_ACCOUNT_NAME) --resource-group $(STORAGE_ACCOUNT_RESOURCE_GROUP_NAME) --location $(STORAGE_LOCATION) --sku Standard_LRS
+            else
+              echo "Storage account $(STORAGE_ACCOUNT_NAME) already exists."
+            fi
+
+            # check if the blob container exists and create if not:
+            accountKey=$(az storage account keys list --resource-group $(STORAGE_ACCOUNT_RESOURCE_GROUP_NAME) --account-name $(STORAGE_ACCOUNT_NAME) --query '[0].value' -o tsv)
+            # Check if the blob container exists
+            containerExists=$(az storage container exists --name $(STORAGE_CONTAINER_NAME) --account-name $(STORAGE_ACCOUNT_NAME) --account-key $accountKey --query 'exists' -o tsv)
+            if [ "$containerExists" == "true" ]; then
+              echo "Storage container already exists."
+            else
+            # Create the blob container
+            az storage container create --name $(STORAGE_CONTAINER_NAME) --account-name $(STORAGE_ACCOUNT_NAME) --account-key $accountKey
+              echo "Storage container created."
+            fi

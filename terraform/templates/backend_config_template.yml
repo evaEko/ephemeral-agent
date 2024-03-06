@@ -1,0 +1,28 @@
+# File: backend_config_template.yml
+
+parameters:
+  - name: resourceGroupName
+    type: string
+  - name: storageAccountName
+    type: string
+  - name: containerName
+    type: string
+  - name: containerKey
+    type: string
+  - name: outputFileName
+    type: string
+  - name: workingDirectory
+    type: string
+  
+
+steps:
+  - script: |
+      cd "${{ parameters.workingDirectory }}"
+      outputFileName="${{ parameters.outputFileName }}"
+      cat <<EOF > "$outputFileName"
+      resource_group_name  = "${{ parameters.resourceGroupName }}"
+      storage_account_name = "${{ parameters.storageAccountName }}"
+      container_name       = "${{ parameters.containerName }}"
+      key                  = "${{ parameters.containerKey }}"
+      EOF
+    displayName: 'Create backend config'

@@ -1,0 +1,59 @@
+trigger: none
+
+variables:
+- group: AzureDevOpsACI.Secrets
+
+parameters:
+- name: pipelineConfigs
+  type: object
+  default:
+    - name: "create_terraform_storage_account"
+      path: "pipelines/create-storage-account.yml"
+    - name: "create_infrastructure"
+      path: "pipelines/create-infra.yml"
+    - name: "create_image_and_run_agent"
+      path: "pipelines/create-image.yml"
+    - name: "destroy_infra"
+      path: "pipelines/destroy_infra.yml"
+    - name: "build"
+      path: "pipelines/build.yml"
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+- ${{ each config in parameters.pipelineConfigs }}:
+  - bash: |
+      echo "Creating a new pipeline: ${{ config.name }}..."
+      
+      ENCODED_PAT=$(echo -n ":$(AZ_TOKEN)" | base64)
+      
+      curl -X POST \
+        "$(System.CollectionUri)$(System.TeamProject)/_apis/pipelines?api-version=6.1-preview.1" \
+        -H "Authorization: Basic $ENCODED_PAT" \
+        -H "Content-Type: application/json" \
+        -d "{
+              \"folder\": null,
+              \"name\": \"${{ config.name }}\",
+              \"configuration\": {
+                \"type\": \"yaml\",
+                \"path\": \"${{ config.path }}\",
+                \"repository\": {
+                  \"id\": \"$(Build.Repository.ID)\",
+                  \"type\": \"azureReposGit\",
+                  \"name\": \"$(Build.Repository.Name)\"
+                }
+              }
+            }"
+    displayName: 'Create ${{ config.name }} for ${{ config.path }} Pipeline via REST API'
+    env:
+      AZ_TOKEN: $(AZ_TOKEN)
+- bash: |
+    echo "Setting up permissions for the service connection..."
+    echo "Service connection: $(SERVICE_CONNECTION)"
+    echo "Project ID: $(System.TeamProjectId)"
+    echo "Collection URI: $(System.CollectionUri)"
+    echo "PAT: $(AZ_TOKEN)"
+    ./resources/set_permissions_for_service_connection.sh $(SERVICE_CONNECTION) $(System.TeamProjectId) $(System.CollectionUri) $(AZ_TOKEN)
+- bash: |
+    # TODO: set permissions on variable groups (seems like it is not possible)
